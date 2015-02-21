@@ -17,15 +17,19 @@ type FitnessFuncType = [([Bitstring],Bitstring,Bitstring)] -> Fitness
 
 -- PARAMETERS
 geneAlphabet = tg "+itapnrejc0123456789"
-maximumGeneRandomLength = 99 
+maximumGeneRandomLength = 10
 maximumGenomeRandomLength = 3
-maximumDepthOfExecution = 999
+maximumDepthOfExecution = 20
 
 -- MODIFICATION RATES
 
 -- probabilities always measured in 
 -- x out of y
-mutationRate = Chance 1 100
+mutationRate = Chance 1 10
+
+positionMutationRate = Chance 1 100
+
+appendMutationRate = Chance 1 200
 
 -- the best x members of the population will be cloned into the
 -- next generation
@@ -73,16 +77,16 @@ getRandomPopulation alphabet num = do
 
 -- takes to functions and executes the first with the given
 -- chance, otherwise the other
-doWithAChanceOf :: Chance -> IO () -> IO ()-> IO ()
+doWithAChanceOf :: Chance -> IO a -> IO a-> IO a
 doWithAChanceOf (Chance x y) f g = do
 	randomGenerator <- newStdGen
 	let (randNumber,_) = randomR (1,y) randomGenerator
 	if randNumber <= x then do
-		f 
-		return()
+		result <- f 
+		return result
 	else do
-		g
-		return()
+		result <- g
+		return result
 
 -- takes a list of genomes and fitness and returns
 -- a random genome. A higher fitness results in a higher probability
@@ -108,6 +112,52 @@ getNRandom n genomesAndFitness = do
 	restRandom <- getNRandom (n-1) genomesAndFitness
 	return (thisRandom:restRandom)
 
+-- takes a list of genomes and fitness and resturns
+-- two different random genes
+getTwoRandom :: [(Genome,Fitness)] -> IO (Genome,Genome)
+getTwoRandom genomesAndFitness = do
+	firstRandom <- getOneRandom genomesAndFitness
+	secondRandom <- (getOneRandom (deleteFromList firstRandom genomesAndFitness))
+	return (firstRandom,secondRandom)
+	where
+		-- TODO maybe do this a _bit_ more efficiently?!
+		deleteFromList :: Genome -> [(Genome,Fitness)] -> [(Genome,Fitness)]
+		deleteFromList toDelete (x@(genome,_):xs)
+			| toDelete == genome = xs
+			| otherwise = x:(deleteFromList toDelete xs)
+
+randomRange :: Int -> Int -> IO Int
+randomRange a b = do
+	randomGenerator <- newStdGen
+	let (randomValue,_) = randomR (a,b) randomGenerator
+	return randomValue
+------------------------------------
+
+-- RECOMBINATION
+
+-- takes two genomes and crosses over all genes at one point
+onePointRecombination :: Genome -> Genome -> IO Genome
+onePointRecombination [] genome = return genome
+onePointRecombination genome [] = return genome
+onePointRecombination (x:xs) (y:ys) = do
+	recombinatedGene <- onePointRecombinationHelper x y
+	restResult <- onePointRecombination xs ys
+	return (recombinatedGene:restResult)
+	where
+		onePointRecombinationHelper :: Gene -> Gene -> IO Gene
+		onePointRecombinationHelper gene1 gene2 = do
+			randomGenerator <- newStdGen
+			let minLength = min (length gene1) (length gene2)
+			let (randomCrossOverPoint,_) = randomR (0,minLength-1) randomGenerator
+			return ((take randomCrossOverPoint gene1)++(drop randomCrossOverPoint gene2))
+
+recombineN :: Int -> [(Genome,Fitness)] -> IO [Genome]
+recombineN 0 _ = return []
+recombineN n genomesAndFitness = do
+	twoRandom@(random1,random2) <- getTwoRandom genomesAndFitness
+	recombinated <- onePointRecombination random1 random2
+	restRecombinated <- recombineN (n-1) genomesAndFitness
+	return (recombinated:restRecombinated)
 ------------------------------------
 
 
@@ -129,6 +179,7 @@ printRandomGene alphabet = do
 -- MUTATION
 -- replaces the element with index n in the given list with the given element
 replaceAt :: Int -> [a] -> a -> [a]
+replaceAt _ [] _ = []
 replaceAt 0 (x:xs) replaceWithThis = replaceWithThis:xs
 replaceAt n (x:xs) replaceWithThis = x: (replaceAt (n-1) xs replaceWithThis)
 
@@ -144,12 +195,57 @@ pointMutation alphabet (x:xs) = do
 		pointMutationHelper :: Alphabet -> Gene -> IO Gene
 		pointMutationHelper alphabet gene = do
 			randomGenerator <- newStdGen
-			let (randomPosition,_) = randomR (0,(length gene)-1) randomGenerator
-			let (randomNewCodeIndex,_) = randomR (0,(length alphabet)-1) randomGenerator
+			let (randomPosition,randomGenerator1) = randomR (0,(length gene)-1) randomGenerator
+			let (randomNewCodeIndex,_) = randomR (0,(length alphabet)-1) randomGenerator1
 			let randomNewCode = alphabet !! randomNewCodeIndex
 			return (replaceAt randomPosition gene randomNewCode)
 
+genePositionMutation :: Genome -> IO Genome
+genePositionMutation genome = do
+	randomGenerator <- newStdGen
+	let genomeLength = length genome
+	let (firstRandomGene,randomGenerator1) = randomR (0,genomeLength-1) randomGenerator
+	let (secondRandomGene,_) = randomR (0,genomeLength-1) randomGenerator1
+	let firstGene = genome !! firstRandomGene
+	let secondGene = genome !! secondRandomGene
+	return (replaceAt secondRandomGene (replaceAt firstRandomGene genome firstGene) secondGene)
 
+appendMutation :: Genome -> IO Genome
+appendMutation [] = return []
+appendMutation genome = do
+	randomIndex <- randomRange 0 ((length genome)-1)
+	mutatedGene <- appendMutationHelper (genome !! randomIndex)
+	return (replaceAt randomIndex genome mutatedGene)
+	where
+		appendMutationHelper :: Gene -> IO Gene
+		appendMutationHelper gene = do
+			randomGenerator <- newStdGen
+			let (randomNewCodeIndex,_) = randomR (0,(length geneAlphabet)-1) randomGenerator
+			let randomNewCode = geneAlphabet !! randomNewCodeIndex
+			return (randomNewCode:gene)
+
+genePositionMutatePopulation :: Population -> IO Population
+genePositionMutatePopulation [] = return []
+genePositionMutatePopulation (x:xs) = do
+	mutatedOrNot <- doWithAChanceOf positionMutationRate (genePositionMutation x) (return x)
+	restMutatedOrNot <- genePositionMutatePopulation xs
+	return (mutatedOrNot:restMutatedOrNot)
+
+appendMutatePopulation :: Population -> IO Population
+appendMutatePopulation [] = return []
+appendMutatePopulation (x:xs) = do
+	mutatedOrNot <- doWithAChanceOf appendMutationRate (appendMutation x) (return x)
+	restMutatedOrNot <- appendMutatePopulation xs
+	return (mutatedOrNot:restMutatedOrNot)
+
+-- todo delete one mutate
+
+pointMutatePopulation :: Population -> IO Population
+pointMutatePopulation [] = return []
+pointMutatePopulation (x:xs) = do
+	mutatedOrNot <- doWithAChanceOf mutationRate (pointMutation geneAlphabet x) (return x)
+	restMutatedOrNot <- pointMutatePopulation xs
+	return (mutatedOrNot:restMutatedOrNot) 
 
 ------------------------------------
 
@@ -174,28 +270,47 @@ evolutionStep inputPopulation fitnessFunc cases = do
 	let sortedPopulation = reverse( sortBy (comparing snd) fitness )
 	-- clone the best 
 	let clonedBest = take reproduceTopNum sortedPopulation
+	print (map snd sortedPopulation)
+	print (map geneToString (head (map fst sortedPopulation)))
 
 	-- calculate the numbers of how many will be cloned into the next generation
 	-- and how many will be recombined into the net generation
 	let inputPopulationSize = length inputPopulation
 	let (recombinationNum,_) = randomR (0,inputPopulationSize-reproduceTopNum) randomGenerator
-	let (cloneNum,_) = randomR (0,inputPopulationSize - reproduceTopNum - recombinationNum ) randomGenerator
+	let cloneNum = inputPopulationSize - reproduceTopNum - recombinationNum
 
 	-- clone some into the next generation
 	randomClones <- getNRandom cloneNum sortedPopulation
+	-- and produce some trough recombination
+	recombined <- recombineN recombinationNum sortedPopulation
 
-	-- TODO recombine
+	-- create the new population
+	let newGeneration = randomClones ++ recombined ++ (map fst clonedBest)
 
-	print (map snd clonedBest)
-	return (map fst sortedPopulation)
+	-- finally: also mutate the whole new generation according
+	-- to the global mutation rate
+	newGenerationPointMutated <- pointMutatePopulation newGeneration
+	newGenerationPositionMutated <- genePositionMutatePopulation newGenerationPointMutated
+	newGenerationAppendMutated <- appendMutatePopulation newGenerationPositionMutated
+	-- complete!
+	return newGenerationAppendMutated
 
+
+
+evolve :: Population -> FitnessFuncType -> Fitnesscases -> IO Population
+evolve inputPopulation fitnessFunc cases = do
+	evolvedPopulation <- evolutionStep inputPopulation fitnessFunc cases
+	evolve evolvedPopulation fitnessFunc cases
 
 -- FITNESS FUNCTIONS
 
 -- this is an example fitness, which criteria is the 
 -- difference of lengths of desired output and actual output lists
 fitnessLengthDiff :: FitnessFuncType
-fitnessLengthDiff cases = sum [ 20 - abs((genericLength desired) - (genericLength output)) | (_,desired,output) <- cases]
+fitnessLengthDiff cases = max 0 (sum [ 20 - abs((genericLength desired) - (genericLength output)) | (_,desired,output) <- cases])
+
+fitnessIsEqual :: FitnessFuncType
+fitnessIsEqual cases = max 0 ( sum [20 - (if desired == output then 0 else 1) | (_,desired,output) <- cases])
 
 ------------------------------------
 
@@ -203,8 +318,8 @@ fitnessLengthDiff cases = sum [ 20 - abs((genericLength desired) - (genericLengt
 _TEST_population :: IO ()
 _TEST_population = do 
 	randPopulation <- getRandomPopulation geneAlphabet 10
-	let cases = [([[R]],[R]),([[L,L]],[L,L]),([[L,L,L]],[L,L,L])]
-	result <- evolutionStep randPopulation fitnessLengthDiff cases
+	let cases = [([[R]],[L]),([[R]],[L]),([[R,L]],[L,R]),([[L,R]],[R,L]),([[R,R]],[L,L]),([[R,R]],[L,L])]
+	result <- evolve randPopulation fitnessIsEqual cases
 	return()
 
 

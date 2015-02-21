@@ -8,7 +8,7 @@ import Data.Char
 data Bit = L | R deriving (Eq, Show)
 type Bitstring = [Bit]
 
-data GeneComponent = GeneOperator Char | GeneParameter Int
+data GeneComponent = GeneOperator Char | GeneParameter Int deriving Eq
 type Gene = [GeneComponent]
 type Genome = [Gene]
 
