@@ -19,7 +19,7 @@ type FitnessFuncType = [([Bitstring],Bitstring,Bitstring)] -> Fitness
 geneAlphabet = tg "+itapnrejc0123456789"
 maximumGeneRandomLength = 10
 maximumGenomeRandomLength = 3
-maximumDepthOfExecution = 20
+maximumDepthOfExecution = 200
 
 -- MODIFICATION RATES
 
